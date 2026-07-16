@@ -1,3 +1,4 @@
 # Agent coms — never commit inter-agent chatter
 .coms.md
 .coms.sig
+.artifacts.md
