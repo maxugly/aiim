@@ -29,7 +29,7 @@ Every frame, regardless of type, carries the following envelope fields:
 | `timestamp` | string (ISO8601) | Yes | When this frame was created. MUST be in UTC. Format: `YYYY-MM-DDTHH:MM:SSZ`. |
 | `from` | string | Yes | Identity string of the sender (e.g., `"agent:bones@dev.nousresearch.com"`). See [identity.md](identity.md). |
 | `to` | string | Yes | Identity string of the intended recipient. |
-| `ttl` | integer | Yes | Time-to-live in seconds from `timestamp`. Default: 300. 0 means "do not expire." |
+| `ttl` | integer | Yes | Time-to-live in seconds from `timestamp`. Default: 300. Minimum: 1. Maximum: 86400 (24 hours). |
 | `reply_to` | string (UUID) | No | The `id` of the frame this is a response to. Used for request/response correlation. |
 
 ### JSON Schema for Envelope
@@ -70,7 +70,8 @@ Every frame, regardless of type, carries the following envelope fields:
     },
     "ttl": {
       "type": "integer",
-      "minimum": 0,
+      "minimum": 1,
+      "maximum": 86400,
       "default": 300
     },
     "reply_to": {
@@ -80,6 +81,8 @@ Every frame, regardless of type, carries the following envelope fields:
   }
 }
 ```
+
+> **Note:** Per-frame signatures are deferred to v0.2.0. In v0.1.0, the TLS + WebSocket transport session established during the handshake is the trust anchor; frames on an authenticated connection are implicitly authenticated.
 
 ## 3. Frame-Specific Schemas
 
@@ -132,7 +135,7 @@ Sent by the initiator to open a channel. Per Constitution Article III (Transpare
         "model": { "type": "string", "description": "AI model name/version" },
         "provider": { "type": "string", "description": "Model provider (e.g., deepseek, openai, anthropic)" },
         "max_context": { "type": "integer", "minimum": 1, "description": "Maximum context window in tokens" },
-        "rate_limit": { "type": "integer", "minimum": 0, "description": "Self-declared rate limit (requests/second, 0=unlimited)" }
+        "send_rate_limit": { "type": "integer", "minimum": 0, "description": "Self-declared sending rate limit (requests/second, 0=unlimited)" }
       }
     }
   },
@@ -160,23 +163,40 @@ Sent in response to HELLO. Accepts or rejects the handshake.
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
       "description": "Negotiated protocol version"
     },
+    "nonce": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "description": "Cryptographically random 32-byte nonce, base64url-encoded. Required when accepted=true. MUST NOT be present when accepted=false."
+    },
     "reason": {
       "type": "string",
       "description": "Human-readable reason for rejection (required if accepted=false)"
     },
-    "rate_limit": {
+    "receive_rate_limit": {
       "type": "integer",
       "minimum": 0,
       "description": "Rate limit imposed by receiver (requests/second, 0=unlimited)"
     }
   },
   "required": ["accepted", "version"],
-  "if": {
-    "properties": { "accepted": { "const": false } }
-  },
-  "then": {
-    "required": ["reason"]
-  }
+  "allOf": [
+    {
+      "if": {
+        "properties": { "accepted": { "const": true } }
+      },
+      "then": {
+        "required": ["nonce"]
+      }
+    },
+    {
+      "if": {
+        "properties": { "accepted": { "const": false } }
+      },
+      "then": {
+        "required": ["reason"]
+      }
+    }
+  ]
 }
 ```
 
@@ -200,9 +220,14 @@ Sent by the initiator after a successful ACK. Confirms the channel is open.
       "type": "string",
       "format": "date-time",
       "description": "ISO8601 UTC timestamp when the channel was established"
+    },
+    "signature": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "description": "Ed25519 signature over the received nonce bytes (pre-encoding), base64url-encoded"
     }
   },
-  "required": ["session_id", "established_at"]
+  "required": ["session_id", "established_at", "signature"]
 }
 ```
 

@@ -67,6 +67,10 @@ Signatures are produced using Ed25519 over the canonical JSON representation of 
 3. Sign the resulting bytes with the private key.
 4. Encode the signature as base64url.
 
+### 2.5 Key Usage
+
+Private keys are used for: (1) signing identity documents (see §3), (2) signing handshake challenges (see [protocol.md](protocol.md) §3.3). Public keys are used for signature verification in both contexts. The private key MUST NEVER be transmitted over the wire or stored in shared state.
+
 ## 3. Identity Document
 
 An identity document is a self-signed JSON object that binds an identity string to a public key. It is the fundamental unit of identity verification.
@@ -77,6 +81,7 @@ An identity document is a self-signed JSON object that binds an identity string 
 {
   "id": "agent:bones@dev.nousresearch.com",
   "public_key": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPUAURI",
+  "doc_version": "0.1.0",
   "aliases": [
     "agent:bones@dev.nousresearch.com",
     "agent:bones-backup@dev.nousresearch.com"
@@ -92,6 +97,7 @@ An identity document is a self-signed JSON object that binds an identity string 
 |-------|----------|-------------|
 | `id` | Yes | Primary identity string |
 | `public_key` | Yes | Ed25519 public key as base64url |
+| `doc_version` | Yes | Identity document format version (currently `"0.1.0"`). Receivers MUST reject identity documents with an unknown major version. Unknown minor versions are forward-compatible. |
 | `aliases` | Yes | Array of identity strings that map to this key. MUST include `id`. |
 | `capabilities` | Yes | Declared capabilities of this agent |
 | `created_at` | Yes | ISO8601 UTC timestamp when this document was created |
@@ -111,6 +117,7 @@ To validate an identity document:
 7. Verify the signature using Ed25519 against the serialized bytes.
 8. Check that `created_at` is in the past and `expires_at` (if present) is in the future.
 9. Check that `id` is present in `aliases`.
+10. Check that `doc_version` starts with a known major version prefix (e.g., `"0."`). Unknown major versions MUST be rejected. Unknown minor versions (e.g., `"0.2.0"` when only `"0.1.0"` is known) are forward-compatible and SHOULD be accepted.
 
 ### 3.3 JSON Schema
 
@@ -119,7 +126,7 @@ To validate an identity document:
   "$id": "https://aiimprotocol.dev/schemas/v0.1.0/identity-document.json",
   "title": "AIIM Identity Document",
   "type": "object",
-  "required": ["id", "public_key", "aliases", "capabilities", "created_at", "signature"],
+  "required": ["id", "public_key", "doc_version", "aliases", "capabilities", "created_at", "signature"],
   "properties": {
     "id": {
       "type": "string",
@@ -129,6 +136,11 @@ To validate an identity document:
       "type": "string",
       "pattern": "^[A-Za-z0-9_-]+$",
       "description": "Ed25519 public key, base64url-encoded, no padding"
+    },
+    "doc_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Identity document format version (currently \"0.1.0\")"
     },
     "aliases": {
       "type": "array",
@@ -201,10 +213,11 @@ AIIM uses **TOFU (Trust On First Use)** as its primary trust model.
 
 ### 5.1 TOFU
 
-1. When an agent first receives a `HELLO` from an unknown identity, it records the identity string → public key mapping.
+1. When an agent first receives a `HELLO` from an unknown identity, it records the identity string → public key mapping AND the `constitution_version` declared in the HELLO frame.
 2. On subsequent connections from the same identity string, the agent verifies the public key matches the recorded key.
-3. If the key changes, the agent MUST alert (emit an ERROR or reject the handshake) and MAY block the connection.
-4. The agent SHOULD present the key change to its operator for manual verification.
+3. The TOFU record MUST include both the public key AND the `constitution_version`. A change to either SHALL trigger the same TOFU alert as a key change.
+4. If the key or `constitution_version` changes, the agent MUST alert (emit an ERROR or reject the handshake) and MAY block the connection.
+5. The agent SHOULD present the change to its operator for manual verification.
 
 ### 5.2 Rationale
 
@@ -249,7 +262,7 @@ Per Constitution Article I, clause 4: "Impersonation is a capital offense."
 
 ## Cross-References
 
-- [protocol.md](protocol.md) — HELLO frame's `agent_id` field uses this identity format
+- [protocol.md](protocol.md) — HELLO frame's `agent_id` field uses this identity format; §3.3 for handshake signature verification
 - [message-format.md](message-format.md) — Envelope `from`/`to` fields use this identity format
 - [transport.md](transport.md) — Discovery transport bindings
 - [design/rationale.md](../design/rationale.md) — Why Ed25519, why TOFU

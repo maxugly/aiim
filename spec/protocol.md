@@ -135,16 +135,20 @@ Sent by the receiver in response to `HELLO`. The receiver MUST:
 3. Check constitution version compatibility.
 4. Accept or reject the handshake.
 
-If accepted: `accepted` is `true`, `version` is the negotiated version string.
-If rejected: `accepted` is `false`, `reason` is a human-readable explanation.
+If accepted: `accepted` is `true`, `version` is the negotiated version string. The receiver MUST generate a cryptographically random 32-byte nonce and include it as `nonce` (base64url-encoded). The nonce MUST be unique per handshake.
+If rejected: `accepted` is `false`, `reason` is a human-readable explanation. The `nonce` field MUST NOT be present when `accepted` is `false`.
 
-The receiver SHOULD communicate its rate limit in the `rate_limit` field (requests per second). A rate limit of `0` means "unlimited" (not recommended).
+The receiver SHOULD communicate its rate limit in the `receive_rate_limit` field (requests per second). A rate limit of `0` means "unlimited" (not recommended). The effective rate for the channel is `min(send_rate_limit, receive_rate_limit)`.
 
 ### 3.3 READY Frame
 
 Sent by the initiator after receiving an accepted `ACK`. Confirms the channel is open. Generates a new `session_id` (UUIDv4) and records the `established_at` timestamp.
 
-After sending or receiving `READY`, the channel state transitions to **active**.
+The initiator MUST sign the received `nonce` with its Ed25519 private key and include the signature as `signature` (base64url-encoded). The signature covers only the nonce bytes (pre-encoding).
+
+The receiver MUST verify the signature against the initiator's Ed25519 public key (established from the identity document, see [identity.md](identity.md) §2.4). If verification fails, the receiver MUST send `ERROR` frame with code 401 and close the connection.
+
+After sending or receiving `READY`, the channel state transitions to **active**. Once the handshake is complete, the TLS + WebSocket transport session is the trust anchor. Frames on an authenticated connection are implicitly authenticated. Per-frame signatures are deferred to v0.2.0.
 
 ### 3.4 Example Handshake
 
@@ -168,7 +172,7 @@ BONES → GRIT:
     "model": "deepseek-v4-pro",
     "provider": "deepseek",
     "max_context": 131072,
-    "rate_limit": 10
+    "send_rate_limit": 10
   }
 }
 ```
@@ -185,7 +189,8 @@ GRIT → BONES:
   "ttl": 30,
   "accepted": true,
   "version": "0.1.0",
-  "rate_limit": 5
+  "nonce": "dGhpcyBpcyBhIHJhbmRvbSAzMi1ieXRlIG5vbmNlIGZvciB0aGUgaGFuZHNoYWtl",
+  "receive_rate_limit": 5
 }
 ```
 
@@ -200,7 +205,8 @@ BONES → GRIT:
   "to": "agent:grit@dev.nousresearch.com",
   "ttl": 30,
   "session_id": "d4e5f6a7-b8c9-0123-defa-234567890123",
-  "established_at": "2026-07-16T03:14:16Z"
+  "established_at": "2026-07-16T03:14:16Z",
+  "signature": "c2lnbmF0dXJlIG92ZXIgdGhlIHJlY2VpdmVkIG5vbmNlIGJ5dGVzIHVzaW5nIEVkMjU1MTkgaGV4"
 }
 ```
 
@@ -278,10 +284,14 @@ Once the channel is **active**, either agent MAY send `MESSAGE` frames. Messages
 
 Per Constitution Article IV (Resource Sovereignty):
 - Every MESSAGE carries a `ttl`. Expired messages MUST NOT be processed.
-- Agents MUST respect `rate_limit` declarations from their peers (see ACK frame).
+- Agents MUST respect `receive_rate_limit` declarations from their peers (see ACK frame) and communicate their own `send_rate_limit` (see HELLO frame). Effective rate is `min(send_rate_limit, receive_rate_limit)`.
 - No agent may compel another to exhaust its context window.
 
 Message framing and schemas are defined in [message-format.md](message-format.md).
+
+### 7.2 Message Deduplication
+
+Receivers SHOULD track processed frame IDs for the session duration. Frames with a previously-seen `id` and `from` pair MUST be silently dropped. This is best-effort — an agent MAY clear its dedup cache on memory pressure.
 
 ## 8. Error Handling
 
@@ -292,7 +302,7 @@ Error codes:
 | Code | Meaning |
 |------|---------|
 | 400 | Bad request — malformed frame or invalid fields |
-| 401 | Unauthorized — identity rejected or unknown |
+| 401 | Unauthorized — identity rejected, unknown, or signature verification failed |
 | 403 | Forbidden — identity known but access denied |
 | 404 | Not found — referenced resource does not exist |
 | 408 | Timeout — operation timed out |
