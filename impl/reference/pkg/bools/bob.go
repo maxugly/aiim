@@ -1,7 +1,7 @@
 // Package bob: boolean bob — the lightweight state machine maintainer.
 // Bool owns .presence.json. Every entity, every state, every transition
 // flows through bool. Ask bool what's real.
-package bob
+package bools
 
 import (
 	"encoding/json"

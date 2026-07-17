@@ -1,4 +1,4 @@
-package bob
+package bools
 
 import (
 	"encoding/json"
