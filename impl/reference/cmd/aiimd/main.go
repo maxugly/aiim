@@ -19,8 +19,8 @@ import (
 )
 
 var (
-	addr      = flag.String("addr", ":9191", "listen address")
-	agentID   = flag.String("agent-id", "agent:aiimd@localhost", "this agent's identity")
+	addr    = flag.String("addr", ":9191", "listen address")
+	agentID = flag.String("agent-id", "agent:aiimd@localhost", "this agent's identity")
 )
 
 func main() {
@@ -38,11 +38,12 @@ func main() {
 
 	// Register WebSocket handler
 	http.Handle("/aiim/v1", websocket.Handler(func(ws *websocket.Conn) {
-		handleConnection(ws, kp, trust)
+		handleConnection(ws, trust)
 	}))
 
 	// Health check
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, `{"status":"ok","agent":"%s","version":"0.1.0"}`, *agentID)
 	})
@@ -54,31 +55,22 @@ func main() {
 	}
 }
 
-func handleConnection(ws *websocket.Conn, kp *identity.KeyPair, trust *identity.TrustStore) {
+func handleConnection(ws *websocket.Conn, trust *identity.TrustStore) {
 	defer ws.Close()
 
 	remoteAddr := ws.Request().RemoteAddr
 	log.Printf("[%s] new connection", remoteAddr)
 
-	result, err := protocol.HandleHandshake(ws, *agentID, kp, trust)
+	result, err := protocol.HandleHandshake(ws, *agentID, trust)
 	if err != nil {
 		log.Printf("[%s] handshake failed: %v", remoteAddr, err)
-		// HandleHandshake already sent the ERROR frame
 		return
 	}
 
 	log.Printf("[%s] handshake complete — agent=%s session=%s version=%s capabilities=%v",
 		remoteAddr, result.AgentID, result.SessionID, result.Version, result.Capabilities)
 
-	// Channel is ACTIVE. For the reference impl, echo session info and wait.
-	ack := map[string]interface{}{
-		"status":     "active",
-		"session_id": result.SessionID,
-		"agent_id":   result.AgentID,
-		"version":    result.Version,
-		"message":    "handshake complete — channel active",
-	}
-	if err := protocol.WriteFrame(ws, ack); err != nil {
-		log.Printf("[%s] write error: %v", remoteAddr, err)
-	}
+	// Channel is ACTIVE. No post-handshake frame per spec — the channel
+	// simply transitions. Client knows it succeeded because no ERROR was sent.
+	log.Printf("[%s] channel ACTIVE — session=%s", remoteAddr, result.SessionID)
 }

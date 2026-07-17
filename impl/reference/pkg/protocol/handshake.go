@@ -23,8 +23,7 @@ type HandshakeResult struct {
 
 // HandleHandshake performs the server side of the AIIM handshake.
 // Reads HELLO, validates, sends ACK with nonce, reads READY, verifies signature.
-// Returns the handshake result or an error.
-func HandleHandshake(rw io.ReadWriter, serverID string, keypair *identity.KeyPair, trust *identity.TrustStore) (*HandshakeResult, error) {
+func HandleHandshake(rw io.ReadWriter, serverID string, trust *identity.TrustStore) (*HandshakeResult, error) {
 	reader := bufio.NewReader(rw)
 
 	// --- Step 1: Read HELLO ---
@@ -37,40 +36,46 @@ func HandleHandshake(rw io.ReadWriter, serverID string, keypair *identity.KeyPai
 	}
 	hello := frame.Hello
 
-	// Validate agent_id equals from
+	// Validate agent_id equals from (spec §3.1: MUST reject with ERROR 400)
 	if hello.AgentID != frame.Envelope.From {
-		errFrame := buildAckError(frame.Envelope.From, serverID, false, "agent_id does not match envelope from field")
-		WriteFrame(rw, errFrame)
+		writeError(rw, frame.Envelope.From, serverID, 400, "agent_id does not match envelope from field")
 		return nil, fmt.Errorf("agent_id mismatch: %s != %s", hello.AgentID, frame.Envelope.From)
+	}
+
+	// Validate TTL bounds (spec: min=1, max=86400)
+	if frame.Envelope.TTL < 1 || frame.Envelope.TTL > 86400 {
+		writeError(rw, frame.Envelope.From, serverID, 400,
+			fmt.Sprintf("ttl %d out of range [1, 86400]", frame.Envelope.TTL))
+		return nil, fmt.Errorf("ttl out of range: %d", frame.Envelope.TTL)
 	}
 
 	// --- Step 2: Version Negotiation ---
 	negotiatedVersion, err := negotiateVersion(hello.SupportedVersions, []string{"0.1.0"})
 	if err != nil {
-		errFrame := buildAckError(frame.Envelope.From, serverID, false, err.Error())
-		WriteFrame(rw, errFrame)
+		writeAckRejection(rw, frame.Envelope.From, serverID, err.Error())
 		return nil, err
 	}
 
-	// --- Step 3: Generate Nonce ---
+	// --- Step 3: Generate Nonce (32 random bytes, RawURLEncoding — no padding) ---
 	nonce := make([]byte, 32)
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, fmt.Errorf("generating nonce: %w", err)
 	}
-	nonceB64 := base64.URLEncoding.EncodeToString(nonce)
+	nonceB64 := base64.RawURLEncoding.EncodeToString(nonce)
 
 	// --- Step 4: Send ACK ---
-	ack := struct {
-		Envelope
-		AckFrame
-	}{
-		Envelope: NewEnvelope(TypeAck, serverID, frame.Envelope.From),
-		AckFrame: AckFrame{
-			Accepted:         true,
-			Version:          negotiatedVersion,
-			Nonce:            nonceB64,
-			ReceiveRateLimit: 10,
-		},
+	ack := ackWire{
+		Type:             TypeAck,
+		Version:          "0.1.0",
+		ID:               newUUIDv4(),
+		Timestamp:        time.Now().UTC().Format(time.RFC3339),
+		From:             serverID,
+		To:               frame.Envelope.From,
+		TTL:              30,
+		Accepted:         true,
+		NegotiatedVersion: negotiatedVersion,
+		Nonce:            nonceB64,
+		ReceiveRateLimit: 10,
 	}
 	if err := WriteFrame(rw, ack); err != nil {
 		return nil, fmt.Errorf("sending ACK: %w", err)
@@ -82,35 +87,32 @@ func HandleHandshake(rw io.ReadWriter, serverID string, keypair *identity.KeyPai
 		return nil, fmt.Errorf("reading READY: %w", err)
 	}
 	if frame.Envelope.Type != TypeReady || frame.Ready == nil {
-		// Send ERROR for unexpected frame type
-		errFrame := buildError(frame.Envelope.From, serverID, 400, fmt.Sprintf("expected READY, got %s", frame.Envelope.Type))
-		WriteFrame(rw, errFrame)
+		writeError(rw, frame.Envelope.From, serverID, 400,
+			fmt.Sprintf("expected READY, got %s", frame.Envelope.Type))
 		return nil, fmt.Errorf("expected READY, got %s", frame.Envelope.Type)
 	}
 	ready := frame.Ready
 
 	// --- Step 6: Verify Signature ---
-	// Reference impl shortcut: accept public_key in HELLO metadata until
-	// full identity document infrastructure exists (see spec/identity.md).
-	// In production, the receiver fetches the identity document to get the key.
 	clientPubKey := hello.Metadata.PublicKey
 	pubKey, err := identity.DecodePublicKey(clientPubKey)
 	if err != nil {
-		errFrame := buildError(frame.Envelope.From, serverID, 400, "invalid or missing public_key in HELLO metadata")
-		WriteFrame(rw, errFrame)
+		writeError(rw, frame.Envelope.From, serverID, 400, "invalid or missing public_key in HELLO metadata")
 		return nil, fmt.Errorf("decoding client public key: %w", err)
 	}
 
-	// Verify the signature against the CLIENT's public key
 	valid, err := identity.Verify(pubKey, nonce, ready.Signature)
 	if err != nil || !valid {
-		errFrame := buildError(frame.Envelope.From, serverID, 401, "signature verification failed")
-		WriteFrame(rw, errFrame)
+		writeError(rw, frame.Envelope.From, serverID, 401, "signature verification failed")
 		return nil, fmt.Errorf("signature verification failed for %s", hello.AgentID)
 	}
 
-	// Trust On First Use — record the initiator's key
-	trust.Record(hello.AgentID, pubKey)
+	// --- Step 7: TOFU — Trust On First Use ---
+	if !trust.Record(hello.AgentID, pubKey, hello.ConstitutionVersion) {
+		writeError(rw, frame.Envelope.From, serverID, 401,
+			"TOFU alert: agent identity key or constitution_version has changed. Operator verification required.")
+		return nil, fmt.Errorf("TOFU alert for %s: key or constitution_version changed", hello.AgentID)
+	}
 
 	return &HandshakeResult{
 		SessionID:    ready.SessionID,
@@ -120,13 +122,12 @@ func HandleHandshake(rw io.ReadWriter, serverID string, keypair *identity.KeyPai
 	}, nil
 }
 
-// negotiateVersion picks the highest common version.
+// negotiateVersion picks the highest common version respecting client preference order.
 func negotiateVersion(clientVersions, serverVersions []string) (string, error) {
 	serverSet := make(map[string]bool)
 	for _, v := range serverVersions {
 		serverSet[v] = true
 	}
-	// Client versions are ordered by preference (highest first)
 	for _, v := range clientVersions {
 		if serverSet[v] {
 			return v, nil
@@ -136,42 +137,58 @@ func negotiateVersion(clientVersions, serverVersions []string) (string, error) {
 		clientVersions, serverVersions)
 }
 
-// buildAckError builds a rejection ACK frame.
-func buildAckError(from, to string, accepted bool, reason string) interface{} {
-	return struct {
-		Envelope
-		AckFrame
-	}{
-		Envelope: NewEnvelope(TypeAck, to, from),
-		AckFrame: AckFrame{
-			Accepted:         accepted,
-			Version:          "0.1.0",
-			Reason:           reason,
-			ReceiveRateLimit: 0,
-		},
-	}
+// ackWire is the flat wire format for ACK frames. Using a flat struct avoids
+// JSON tag collision between Envelope.Version and AckFrame's negotiated version.
+type ackWire struct {
+	Type              FrameType `json:"type"`
+	Version           string    `json:"version"`
+	ID                string    `json:"id"`
+	Timestamp         string    `json:"timestamp"`
+	From              string    `json:"from"`
+	To                string    `json:"to"`
+	TTL               int       `json:"ttl"`
+	Accepted          bool      `json:"accepted"`
+	NegotiatedVersion string    `json:"negotiated_version"`
+	Reason            string    `json:"reason,omitempty"`
+	Nonce             string    `json:"nonce,omitempty"`
+	ReceiveRateLimit  int       `json:"receive_rate_limit"`
 }
 
-// buildError builds an ERROR frame.
-func buildError(from, to string, code int, reason string) interface{} {
-	return struct {
+// writeAckRejection writes an ACK rejection frame.
+func writeAckRejection(w io.Writer, from, to, reason string) {
+	ack := ackWire{
+		Type:             TypeAck,
+		Version:          "0.1.0",
+		ID:               newUUIDv4(),
+		Timestamp:        time.Now().UTC().Format(time.RFC3339),
+		From:             to,
+		To:               from,
+		TTL:              30,
+		Accepted:         false,
+		NegotiatedVersion: "0.1.0",
+		Reason:           reason,
+		ReceiveRateLimit: 0,
+	}
+	WriteFrame(w, ack)
+}
+
+// writeError writes an ERROR frame and flushes. Used for fatal protocol errors.
+func writeError(w io.Writer, from, to string, code int, reason string) {
+	errFrame := struct {
 		Envelope
 		ErrorFrame
 	}{
-		Envelope: NewEnvelope(TypeError, to, from),
-		ErrorFrame: ErrorFrame{
-			Code:   code,
-			Reason: reason,
-		},
+		Envelope:  NewEnvelope(TypeError, to, from),
+		ErrorFrame: ErrorFrame{Code: code, Reason: reason},
 	}
+	WriteFrame(w, errFrame)
 }
 
 // MakeReady creates a READY frame with a signature over the nonce.
 func MakeReady(from, to, sessionID, nonceB64 string, keypair *identity.KeyPair) interface{} {
-	// Decode the nonce to get raw bytes for signing
-	nonce, err := base64.URLEncoding.DecodeString(nonceB64)
+	nonce, err := base64.RawURLEncoding.DecodeString(nonceB64)
 	if err != nil {
-		nonce = []byte(nonceB64) // fallback: sign the encoded string
+		nonce = []byte(nonceB64)
 	}
 	signature := keypair.Sign(nonce)
 

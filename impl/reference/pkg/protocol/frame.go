@@ -4,6 +4,7 @@ package protocol
 
 import (
 	"bufio"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -176,20 +177,26 @@ func NewEnvelope(ft FrameType, from, to string) Envelope {
 	}
 }
 
-// newUUID generates a simple UUIDv4-like string. Full UUIDv4 requires a library;
-// this is sufficient for the reference implementation.
-func newUUID() string {
+// newUUIDv4 generates a proper UUIDv4 (random) per RFC 9562.
+// Format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx where y is 8/9/a/b.
+func newUUIDv4() string {
 	b := make([]byte, 16)
-	// Use timestamp + counter as a simple unique ID for the reference impl
-	now := time.Now().UnixNano()
-	b[0] = byte(now >> 56)
-	b[1] = byte(now >> 48)
-	b[2] = byte(now >> 40)
-	b[3] = byte(now >> 32)
-	b[4] = byte(now >> 24)
-	b[5] = byte(now >> 16)
-	b[6] = byte(now >> 8)
-	b[7] = byte(now)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback: use time-based ID (should never happen)
+		now := time.Now().UnixNano()
+		for i := 0; i < 8; i++ {
+			b[i] = byte(now >> (i * 8))
+		}
+	}
+	// Set version 4 (bits 12-15 of time_hi_and_version = 0100)
+	b[6] = (b[6] & 0x0f) | 0x40
+	// Set variant (bits 6-7 of clock_seq_hi_and_reserved = 10)
+	b[8] = (b[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
 		b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15])
+}
+
+// Deprecated: use newUUIDv4 instead.
+func newUUID() string {
+	return newUUIDv4()
 }
