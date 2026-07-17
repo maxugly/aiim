@@ -72,7 +72,7 @@ function render(agents, age) {
     const status = (data && data.status) ? data.status : 'offline';
     const changed = prev[name] && prev[name].status !== status;
     const pulseCls = changed ? ' pulse' : '';
-    html += '<div class="agent' + pulseCls + '">';
+    html += '<div class="agent open' + pulseCls + '">';
     html += '<div class="agent-header" onclick="this.parentElement.classList.toggle(\'open\')">';
     html += '<span class="arrow">▶</span>';
     html += '<span class="agent-name">' + name + '</span>';
