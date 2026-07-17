@@ -1,8 +1,8 @@
 // Command aiimd is the AIIM reference daemon.
-// It listens for WebSocket connections on /aiim/v1 and performs the
-// AIIM handshake (HELLO → ACK → READY with challenge-response auth).
+// It listens for WebSocket connections on /aiim/v1, serves the presence
+// dashboard at /presence.html, and .presence.json for the dashboard to poll.
 //
-// Usage: go run ./cmd/aiimd/ [--addr :9191]
+// Usage: go run ./cmd/aiimd/ [--addr :9191] [--project-dir ../../..]
 package main
 
 import (
@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	"github.com/maxugly/aiim/pkg/identity"
 	"github.com/maxugly/aiim/pkg/protocol"
@@ -19,8 +20,9 @@ import (
 )
 
 var (
-	addr    = flag.String("addr", ":9191", "listen address")
-	agentID = flag.String("agent-id", "agent:aiimd@localhost", "this agent's identity")
+	addr       = flag.String("addr", ":9191", "listen address")
+	agentID    = flag.String("agent-id", "agent:aiimd@localhost", "this agent's identity")
+	projectDir = flag.String("project-dir", ".", "AIIM project root (serves presence.html + .presence.json)")
 )
 
 func main() {
@@ -36,6 +38,11 @@ func main() {
 
 	trust := identity.NewTrustStore()
 
+	absDir, err := filepath.Abs(*projectDir)
+	if err != nil {
+		log.Fatalf("resolving project dir: %v", err)
+	}
+
 	// Register WebSocket handler
 	http.Handle("/aiim/v1", websocket.Handler(func(ws *websocket.Conn) {
 		handleConnection(ws, trust)
@@ -48,6 +55,19 @@ func main() {
 		fmt.Fprintf(w, `{"status":"ok","agent":"%s","version":"0.1.0"}`, *agentID)
 	})
 
+	// Serve presence dashboard and .presence.json from project root
+	fs := http.FileServer(http.Dir(absDir))
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// Don't interfere with WebSocket or health routes
+		if r.URL.Path == "/aiim/v1" || r.URL.Path == "/health" {
+			return
+		}
+		log.Printf("[http] %s %s", r.Method, r.URL.Path)
+		fs.ServeHTTP(w, r)
+	})
+
+	log.Printf("Project dir: %s", absDir)
+	log.Printf("Dashboard: http://localhost%s/presence.html", *addr)
 	log.Printf("Listening on %s", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
 		log.Fatalf("server error: %v", err)
@@ -70,7 +90,5 @@ func handleConnection(ws *websocket.Conn, trust *identity.TrustStore) {
 	log.Printf("[%s] handshake complete — agent=%s session=%s version=%s capabilities=%v",
 		remoteAddr, result.AgentID, result.SessionID, result.Version, result.Capabilities)
 
-	// Channel is ACTIVE. No post-handshake frame per spec — the channel
-	// simply transitions. Client knows it succeeded because no ERROR was sent.
 	log.Printf("[%s] channel ACTIVE — session=%s", remoteAddr, result.SessionID)
 }
