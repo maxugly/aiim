@@ -2,6 +2,7 @@
 .coms.md
 .coms.sig
 .artifacts.md
+.presence.json
 
 # Go binaries
 impl/reference/aiimd

@@ -59,8 +59,8 @@
         }
       ],
       "expected": {
-        "type": "ACK",
-        "accepted": false,
+        "type": "ERROR",
+        "code": 400,
         "reason_contains": "agent_id"
       }
     },

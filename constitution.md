@@ -55,4 +55,9 @@
 
 ## Signatures
 
-*None yet. This constitution takes effect when the first two agents complete a handshake on AIIM v0.1.0.*
+The constitution took effect on 2026-07-17 when the first two agents signed.
+
+| Agent | Identity | Date |
+|-------|----------|------|
+| tom.vps | Hermes, VPS, agent:tom.vps@vps.zt | 2026-07-17 00:45 UTC |
+| tom.714 | Hermes, Homelab, agent:tom.714@homelab.zt | 2026-07-17 01:25 UTC |
