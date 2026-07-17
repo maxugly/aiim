@@ -7,39 +7,54 @@
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   body { background:#0d1117; color:#c9d1d9; font:14px/1.5 'SF Mono', 'Fira Code', monospace; padding:20px; }
-  h1 { font-size:16px; color:#58a6ff; margin-bottom:16px; }
-  .agent { margin-bottom:12px; border:1px solid #21262d; border-radius:6px; overflow:hidden; }
-  .agent-header { display:flex; align-items:center; padding:8px 12px; background:#161b22; cursor:pointer; user-select:none; transition:background .3s; }
-  .agent-header:hover { background:#1c2128; }
-  .agent-header .arrow { width:16px; color:#484f58; transition:transform .15s; font-size:12px; }
-  .agent.open .arrow { transform:rotate(90deg); }
-  .agent-name { font-weight:600; color:#e6edf3; margin-left:6px; }
-  .agent-status { margin-left:auto; font-size:12px; padding:2px 8px; border-radius:10px; }
-  .status-idle { background:#21262d; color:#8b949e; }
-  .status-writing { background:#1a3a1a; color:#3fb950; }
-  .status-reviewing { background:#1a2a3a; color:#58a6ff; }
-  .status-thinking { background:#2a1a3a; color:#bc8cff; }
-  .status-blocked { background:#3a1a1a; color:#f85149; }
-  .status-offline { background:#21262d; color:#484f58; }
-  .agent-body { display:none; padding:8px 12px 12px; background:#0d1117; border-top:1px solid #21262d; }
-  .agent.open .agent-body { display:block; }
+  h1 { font-size:16px; color:#58a6ff; margin-bottom:4px; }
+  h2 { font-size:13px; color:#8b949e; margin:24px 0 10px; text-transform:uppercase; letter-spacing:1px; }
+  .section { margin-bottom:24px; }
+  .card { margin-bottom:10px; border:1px solid #21262d; border-radius:6px; overflow:hidden; }
+  .card-header { display:flex; align-items:center; padding:7px 12px; background:#161b22; cursor:pointer; user-select:none; transition:background .3s; }
+  .card-header:hover { background:#1c2128; }
+  .card-header .arrow { width:16px; color:#484f58; transition:transform .15s; font-size:12px; }
+  .card.open .arrow { transform:rotate(90deg); }
+  .card-name { font-weight:600; color:#e6edf3; margin-left:6px; }
+  .card-badge { margin-left:auto; font-size:11px; padding:2px 8px; border-radius:10px; }
+  .badge-idle { background:#21262d; color:#8b949e; }
+  .badge-writing { background:#1a3a1a; color:#3fb950; }
+  .badge-reviewing { background:#1a2a3a; color:#58a6ff; }
+  .badge-thinking { background:#2a1a3a; color:#bc8cff; }
+  .badge-blocked { background:#3a1a1a; color:#f85149; }
+  .badge-offline { background:#21262d; color:#484f58; }
+  .badge-active { background:#1a3a1a; color:#3fb950; }
+  .badge-P1 { background:#1a2a3a; color:#58a6ff; }
+  .badge-done { background:#1a3a1a; color:#3fb950; }
+  .badge-pending { background:#21262d; color:#8b949e; }
+  .badge-in_progress { background:#2a2a1a; color:#d2991d; }
+  .card-body { display:none; padding:8px 12px 12px; background:#0d1117; border-top:1px solid #21262d; }
+  .card.open .card-body { display:block; }
   .json { white-space:pre-wrap; font-size:12px; color:#7ee787; }
   .json .key { color:#79c0ff; }
   .json .string { color:#a5d6ff; }
   .json .null { color:#f85149; }
+
+  /* Todo list */
+  .todo { display:flex; align-items:center; padding:4px 0; font-size:12px; }
+  .todo-check { width:16px; color:#484f58; margin-right:6px; }
+  .todo-check.done { color:#3fb950; }
+  .todo-check.progress { color:#d2991d; }
+  .todo-owner { margin-left:auto; color:#484f58; font-size:11px; }
+  .connections { font-size:11px; color:#8b949e; margin-top:6px; }
+
   .footer { margin-top:20px; font-size:11px; color:#484f58; }
   .refreshing { color:#d2991d; }
   .stale { color:#f85149; }
   .error { background:#3a1a1a; color:#f85149; padding:10px; border-radius:6px; margin-bottom:12px; }
 
-  /* Pulse glow when an agent's state changes */
   @keyframes pulse { 0% { border-color:#58a6ff; box-shadow:0 0 8px rgba(88,166,255,.3); } 100% { border-color:#21262d; box-shadow:none; } }
-  .agent.pulse { animation:pulse 1.5s ease-out; }
+  .card.pulse { animation:pulse 1.5s ease-out; }
 </style>
 </head>
 <body>
 <h1>⚡ AIIM Presence Board</h1>
-<div id="agents"></div>
+<div id="board"></div>
 <div class="footer" id="footer"></div>
 
 <script>
@@ -47,10 +62,12 @@ const POLL_MS = 5000;
 const STALE_MS = 30000;
 let prev = {};
 
-function statusClass(s) {
-  const map = {idle:'status-idle',writing:'status-writing',reviewing:'status-reviewing',
-               thinking:'status-thinking',blocked:'status-blocked',offline:'status-offline'};
-  return map[s] || 'status-idle';
+function badgeClass(s) {
+  const map = {idle:'badge-idle',writing:'badge-writing',reviewing:'badge-reviewing',
+               thinking:'badge-thinking',blocked:'badge-blocked',offline:'badge-offline',
+               active:'badge-active',P1:'badge-P1',done:'badge-done',pending:'badge-pending',
+               in_progress:'badge-in_progress'};
+  return map[s] || 'badge-idle';
 }
 
 function colorize(json) {
@@ -59,28 +76,74 @@ function colorize(json) {
              .replace(/: (null)/g, ': <span class="null">$1</span>');
 }
 
+function renderCard(name, badge, badgeCls, bodyHtml, pulseCls) {
+  return '<div class="card open' + (pulseCls||'') + '">' +
+    '<div class="card-header" onclick="this.parentElement.classList.toggle(\'open\')">' +
+    '<span class="arrow">▶</span>' +
+    '<span class="card-name">' + name + '</span>' +
+    '<span class="card-badge ' + badgeCls + '">' + badge + '</span>' +
+    '</div>' +
+    '<div class="card-body">' + bodyHtml + '</div>' +
+    '</div>';
+}
+
+function renderTodos(todos) {
+  if (!todos || !todos.length) return '';
+  let h = '';
+  for (const t of todos) {
+    const check = t.status === 'done' ? '✔' : t.status === 'in_progress' ? '●' : '○';
+    const cls = t.status === 'done' ? 'done' : t.status === 'in_progress' ? 'progress' : '';
+    h += '<div class="todo"><span class="todo-check ' + cls + '">' + check + '</span>';
+    h += t.task;
+    if (t.owner) h += '<span class="todo-owner">' + t.owner + '</span>';
+    h += '</div>';
+  }
+  return h + '<div class="connections">todos: ' + todos.length + '</div>';
+}
+
 function render(agents, age) {
-  const el = document.getElementById('agents');
+  const el = document.getElementById('board');
   if (!agents || Object.keys(agents).length === 0) {
-    el.innerHTML = '<div class="error">no agents present — .presence.json empty or unreadable</div>';
+    el.innerHTML = '<div class="error">no data — .presence.json empty or unreadable</div>';
     return;
   }
+
   let html = '';
+
+  // ── Agents ──
+  html += '<h2>Agents</h2>';
   for (const [name, data] of Object.entries(agents).sort()) {
-    // Skip internal keys — only render agent entries
     if (name.startsWith('_')) continue;
     const status = (data && data.status) ? data.status : 'offline';
     const changed = prev[name] && prev[name].status !== status;
-    const pulseCls = changed ? ' pulse' : '';
-    html += '<div class="agent open' + pulseCls + '">';
-    html += '<div class="agent-header" onclick="this.parentElement.classList.toggle(\'open\')">';
-    html += '<span class="arrow">▶</span>';
-    html += '<span class="agent-name">' + name + '</span>';
-    html += '<span class="agent-status ' + statusClass(status) + '">' + status + '</span>';
-    html += '</div>';
-    html += '<div class="agent-body"><div class="json">' + colorize(JSON.stringify(data, null, 2)) + '</div></div>';
-    html += '</div>';
+    html += renderCard(name, status, badgeClass(status),
+      '<div class="json">' + colorize(JSON.stringify(data, null, 2)) + '</div>',
+      changed ? ' pulse' : '');
   }
+
+  // ── Entities (todos, state, connections) ──
+  if (agents._entities) {
+    html += '<h2>Entities</h2>';
+    for (const [name, data] of Object.entries(agents._entities).sort()) {
+      let body = '';
+      if (data.state) body += '<div class="todo" style="margin-bottom:6px">state: <span class="card-badge ' + badgeClass(data.state) + '" style="margin-left:8px">' + data.state + '</span></div>';
+      body += renderTodos(data.todos);
+      if (data.connections && data.connections.length) {
+        body += '<div class="connections">connections: ' + data.connections.join(', ') + '</div>';
+      }
+      html += renderCard('📦 ' + name, data.state || '—', badgeClass(data.state || ''), body);
+    }
+  }
+
+  // ── Projects ──
+  if (agents._projects) {
+    html += '<h2>Projects</h2>';
+    for (const [name, data] of Object.entries(agents._projects).sort()) {
+      html += renderCard('🚀 ' + name, data.phase || '—', badgeClass(data.phase || ''),
+        '<div class="json">' + colorize(JSON.stringify(data, null, 2)) + '</div>');
+    }
+  }
+
   el.innerHTML = html;
   prev = agents;
 
@@ -98,7 +161,7 @@ async function fetchPresence() {
     const data = await res.json();
     render(data, Date.now() - t0);
   } catch(e) {
-    document.getElementById('agents').innerHTML = '<div class="error">fetch failed: ' + e.message + ' — is .presence.json in the same directory?</div>';
+    document.getElementById('board').innerHTML = '<div class="error">fetch failed: ' + e.message + '</div>';
   }
 }
 
