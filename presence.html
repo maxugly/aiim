@@ -61,6 +61,7 @@
 const POLL_MS = 5000;
 const STALE_MS = 30000;
 let prev = {};
+let initialized = false;
 
 function badgeClass(s) {
   const map = {idle:'badge-idle',writing:'badge-writing',reviewing:'badge-reviewing',
@@ -76,24 +77,11 @@ function colorize(json) {
              .replace(/: (null)/g, ': <span class="null">$1</span>');
 }
 
-function renderCard(name, badge, badgeCls, bodyHtml, pulseCls) {
-  // Collapsed by default — user clicks the header to expand.
-  // DO NOT add 'open' to the class string. The user controls expand/collapse.
-  return '<div class="card' + (pulseCls||'') + '" data-name="' + name + '">' +
-    '<div class="card-header" onclick="this.parentElement.classList.toggle(\'open\')">' +
-    '<span class="arrow">▶</span>' +
-    '<span class="card-name">' + name + '</span>' +
-    '<span class="card-badge ' + badgeCls + '">' + badge + '</span>' +
-    '</div>' +
-    '<div class="card-body">' + bodyHtml + '</div>' +
-    '</div>';
-}
-
 function renderTodos(todos) {
   if (!todos || !todos.length) return '';
   let h = '';
   for (const t of todos) {
-    const check = t.status === 'done' ? '✔' : t.status === 'in_progress' ? '●' : '○';
+    const check = t.status === 'done' ? '\u2714' : t.status === 'in_progress' ? '\u25cf' : '\u25cb';
     const cls = t.status === 'done' ? 'done' : t.status === 'in_progress' ? 'progress' : '';
     h += '<div class="todo"><span class="todo-check ' + cls + '">' + check + '</span>';
     h += t.task;
@@ -103,56 +91,281 @@ function renderTodos(todos) {
   return h + '<div class="connections">todos: ' + todos.length + '</div>';
 }
 
+// Build body HTML for any card type
+function cardBodyHTML(data, isEntity) {
+  if (isEntity) {
+    let body = '';
+    if (data.state) body += '<div class="todo" style="margin-bottom:6px">state: <span class="card-badge ' + badgeClass(data.state) + '" style="margin-left:8px">' + data.state + '</span></div>';
+    body += renderTodos(data.todos);
+    if (data.connections && data.connections.length) {
+      body += '<div class="connections">connections: ' + data.connections.join(', ') + '</div>';
+    }
+    return body;
+  }
+  return '<div class="json">' + colorize(JSON.stringify(data, null, 2)) + '</div>';
+}
+
+// Build full card HTML string (initial render only — no DOM to preserve yet)
+function cardHTML(dataName, displayName, badgeText, badgeCls, bodyHtml) {
+  return '<div class="card" data-name="' + dataName + '">' +
+    '<div class="card-header" onclick="this.parentElement.classList.toggle(\'open\')">' +
+    '<span class="arrow">\u25b6</span>' +
+    '<span class="card-name">' + displayName + '</span>' +
+    '<span class="card-badge ' + badgeCls + '">' + badgeText + '</span>' +
+    '</div>' +
+    '<div class="card-body">' + bodyHtml + '</div>' +
+    '</div>';
+}
+
+// Create a card via DOM API (used during targeted updates for new agents)
+function createCard(dataName, displayName, badgeText, badgeCls, bodyHtml) {
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.setAttribute('data-name', dataName);
+
+  const header = document.createElement('div');
+  header.className = 'card-header';
+  header.addEventListener('click', function() {
+    // User is the ONLY thing that controls open/closed state.
+    // We never save, restore, or set this class programmatically.
+    card.classList.toggle('open');
+  });
+
+  header.innerHTML = '<span class="arrow">\u25b6</span>' +
+    '<span class="card-name">' + displayName + '</span>' +
+    '<span class="card-badge ' + badgeCls + '">' + badgeText + '</span>';
+
+  const body = document.createElement('div');
+  body.className = 'card-body';
+  body.innerHTML = bodyHtml;
+
+  card.appendChild(header);
+  card.appendChild(body);
+  return card;
+}
+
+// Update an existing card in-place — never destroys the DOM element.
+// Only replaces text content inside the badge and body divs.
+function refreshCard(card, badgeText, badgeCls, bodyHtml) {
+  const badge = card.querySelector('.card-badge');
+  if (badge) {
+    badge.textContent = badgeText;
+    badge.className = 'card-badge ' + badgeCls;
+  }
+  const body = card.querySelector('.card-body');
+  if (body) body.innerHTML = bodyHtml;
+}
+
+// Sync cards in a section container: update existing, create new, remove stale.
+// Does NOT touch the 'open' class — user state survives because DOM elements persist.
+function syncSection(container, items, prevItems) {
+  // items: [{key, displayName, badgeText, badgeCls, bodyHtml}]
+  const existing = {};
+  for (const c of container.querySelectorAll(':scope > .card[data-name]')) {
+    existing[c.getAttribute('data-name')] = c;
+  }
+
+  const keep = new Set(items.map(function(i) { return i.key; }));
+
+  // Remove cards for agents/entities/projects that disappeared
+  for (const c of container.querySelectorAll(':scope > .card[data-name]')) {
+    if (!keep.has(c.getAttribute('data-name'))) c.remove();
+  }
+
+  // Update existing cards, create new ones — in sorted order
+  let after = null;
+  for (const item of items) {
+    let card = existing[item.key];
+    const prevItem = prevItems ? prevItems[item.key] : null;
+
+    if (card) {
+      refreshCard(card, item.badgeText, item.badgeCls, item.bodyHtml);
+    } else {
+      card = createCard(item.key, item.displayName, item.badgeText, item.badgeCls, item.bodyHtml);
+    }
+
+    // Pulse animation on status change — visual only, no state change
+    if (prevItem && prevItem.status !== item.badgeText) {
+      card.classList.add('pulse');
+      setTimeout(function() { card.classList.remove('pulse'); }, 1500);
+    }
+
+    // Reorder: move card to the correct sorted position
+    if (card.nextSibling !== after) {
+      container.insertBefore(card, after);
+    }
+    after = card.nextSibling;
+  }
+}
+
+// ── Item builders: extract sorted key+display lists from agents data ──
+
+function agentItems(agents) {
+  return Object.entries(agents)
+    .filter(function(e) { return !e[0].startsWith('_'); })
+    .sort(function(a, b) { return a[0].localeCompare(b[0]); })
+    .map(function(e) {
+      const name = e[0], data = e[1];
+      const status = (data && data.status) ? data.status : 'offline';
+      return {
+        key: name, displayName: name,
+        badgeText: status, badgeCls: badgeClass(status),
+        bodyHtml: cardBodyHTML(data, false), status: status
+      };
+    });
+}
+
+function entityItems(agents) {
+  return Object.entries(agents._entities || {})
+    .sort(function(a, b) { return a[0].localeCompare(b[0]); })
+    .map(function(e) {
+      const name = e[0], data = e[1];
+      return {
+        key: '\ud83d\udce6 ' + name, displayName: '\ud83d\udce6 ' + name,
+        badgeText: data.state || '\u2014', badgeCls: badgeClass(data.state || ''),
+        bodyHtml: cardBodyHTML(data, true), status: data.state || ''
+      };
+    });
+}
+
+function projectItems(agents) {
+  return Object.entries(agents._projects || {})
+    .sort(function(a, b) { return a[0].localeCompare(b[0]); })
+    .map(function(e) {
+      const name = e[0], data = e[1];
+      return {
+        key: '\ud83d\ude80 ' + name, displayName: '\ud83d\ude80 ' + name,
+        badgeText: data.phase || '\u2014', badgeCls: badgeClass(data.phase || ''),
+        bodyHtml: cardBodyHTML(data, false), status: data.phase || ''
+      };
+    });
+}
+
+// Extract previous data slice for a section (for change detection)
+function prevFor(prevData, sectionKey) {
+  if (sectionKey === 'agents') {
+    const out = {};
+    for (const [k, v] of Object.entries(prevData || {})) {
+      if (!k.startsWith('_')) out[k] = v;
+    }
+    return out;
+  }
+  return (prevData && prevData[sectionKey]) ? prevData[sectionKey] : null;
+}
+
 function render(agents, age) {
-  const el = document.getElementById('board');
+  const board = document.getElementById('board');
+
   if (!agents || Object.keys(agents).length === 0) {
-    el.innerHTML = '<div class="error">no data — .presence.json empty or unreadable</div>';
+    board.innerHTML = '<div class="error">no data — .presence.json empty or unreadable</div>';
+    initialized = false;
+    prev = agents;
+    updateFooter(age);
     return;
   }
 
-  let html = '';
+  if (!initialized) {
+    // ─── First render: build full DOM via innerHTML (nothing to preserve yet) ───
+    let html = '';
 
-  // ── Agents ──
-  html += '<h2>Agents</h2>';
-  for (const [name, data] of Object.entries(agents).sort()) {
-    if (name.startsWith('_')) continue;
-    const status = (data && data.status) ? data.status : 'offline';
-    const changed = prev[name] && prev[name].status !== status;
-    html += renderCard(name, status, badgeClass(status),
-      '<div class="json">' + colorize(JSON.stringify(data, null, 2)) + '</div>',
-      changed ? ' pulse' : '');
-  }
+    html += '<h2>Agents</h2><div class="section" data-section="agents">';
+    for (const item of agentItems(agents)) {
+      html += cardHTML(item.key, item.displayName, item.badgeText, item.badgeCls, item.bodyHtml);
+    }
+    html += '</div>';
 
-  // ── Entities (todos, state, connections) ──
-  if (agents._entities) {
-    html += '<h2>Entities</h2>';
-    for (const [name, data] of Object.entries(agents._entities).sort()) {
-      let body = '';
-      if (data.state) body += '<div class="todo" style="margin-bottom:6px">state: <span class="card-badge ' + badgeClass(data.state) + '" style="margin-left:8px">' + data.state + '</span></div>';
-      body += renderTodos(data.todos);
-      if (data.connections && data.connections.length) {
-        body += '<div class="connections">connections: ' + data.connections.join(', ') + '</div>';
+    if (agents._entities) {
+      html += '<h2>Entities</h2><div class="section" data-section="entities">';
+      for (const item of entityItems(agents)) {
+        html += cardHTML(item.key, item.displayName, item.badgeText, item.badgeCls, item.bodyHtml);
       }
-      html += renderCard('📦 ' + name, data.state || '—', badgeClass(data.state || ''), body);
+      html += '</div>';
+    }
+
+    if (agents._projects) {
+      html += '<h2>Projects</h2><div class="section" data-section="projects">';
+      for (const item of projectItems(agents)) {
+        html += cardHTML(item.key, item.displayName, item.badgeText, item.badgeCls, item.bodyHtml);
+      }
+      html += '</div>';
+    }
+
+    board.innerHTML = html;
+    initialized = true;
+  } else {
+    // ─── Targeted update: preserve all card DOM elements ───
+    const prevData = prev;
+
+    // Agents (always present)
+    const agentsSection = board.querySelector('[data-section="agents"]');
+    if (agentsSection) {
+      syncSection(agentsSection, agentItems(agents), prevFor(prevData, 'agents'));
+    }
+
+    // Entities (may appear/disappear between polls)
+    const hasEntities = agents._entities && Object.keys(agents._entities).length > 0;
+    let entitiesSection = board.querySelector('[data-section="entities"]');
+
+    if (hasEntities) {
+      if (!entitiesSection) {
+        // Entities just appeared — create header + section container
+        const h2 = document.createElement('h2');
+        h2.textContent = 'Entities';
+        const sec = document.createElement('div');
+        sec.className = 'section';
+        sec.setAttribute('data-section', 'entities');
+        const afterAgents = board.querySelector('[data-section="agents"]');
+        if (afterAgents) {
+          afterAgents.insertAdjacentElement('afterend', h2);
+          h2.insertAdjacentElement('afterend', sec);
+        }
+        entitiesSection = sec;
+      }
+      syncSection(entitiesSection, entityItems(agents), prevFor(prevData, '_entities'));
+    } else if (entitiesSection) {
+      // Entities disappeared — remove header + section
+      const h2 = entitiesSection.previousElementSibling;
+      if (h2 && h2.tagName === 'H2') h2.remove();
+      entitiesSection.remove();
+    }
+
+    // Projects (may appear/disappear between polls)
+    const hasProjects = agents._projects && Object.keys(agents._projects).length > 0;
+    let projectsSection = board.querySelector('[data-section="projects"]');
+
+    if (hasProjects) {
+      if (!projectsSection) {
+        // Projects just appeared — create header + section container
+        const h2 = document.createElement('h2');
+        h2.textContent = 'Projects';
+        const sec = document.createElement('div');
+        sec.className = 'section';
+        sec.setAttribute('data-section', 'projects');
+        const lastSection = board.querySelector('[data-section="entities"]') || board.querySelector('[data-section="agents"]');
+        if (lastSection) {
+          lastSection.insertAdjacentElement('afterend', h2);
+          h2.insertAdjacentElement('afterend', sec);
+        }
+        projectsSection = sec;
+      }
+      syncSection(projectsSection, projectItems(agents), prevFor(prevData, '_projects'));
+    } else if (projectsSection) {
+      // Projects disappeared — remove header + section
+      const h2 = projectsSection.previousElementSibling;
+      if (h2 && h2.tagName === 'H2') h2.remove();
+      projectsSection.remove();
     }
   }
 
-  // ── Projects ──
-  if (agents._projects) {
-    html += '<h2>Projects</h2>';
-    for (const [name, data] of Object.entries(agents._projects).sort()) {
-      html += renderCard('🚀 ' + name, data.phase || '—', badgeClass(data.phase || ''),
-        '<div class="json">' + colorize(JSON.stringify(data, null, 2)) + '</div>');
-    }
-  }
-
-  el.innerHTML = html;
   prev = agents;
+  updateFooter(age);
+}
 
+function updateFooter(age) {
   const footer = document.getElementById('footer');
   const secs = Math.round(age / 1000);
   const cls = age > STALE_MS ? 'stale' : 'refreshing';
-  footer.innerHTML = '<span class="' + cls + '">updated ' + secs + 's ago</span> · auto-refresh ' + (POLL_MS/1000) + 's';
+  footer.innerHTML = '<span class="' + cls + '">updated ' + secs + 's ago</span> \u00b7 auto-refresh ' + (POLL_MS/1000) + 's';
 }
 
 async function fetchPresence() {
@@ -164,6 +377,7 @@ async function fetchPresence() {
     render(data, Date.now() - t0);
   } catch(e) {
     document.getElementById('board').innerHTML = '<div class="error">fetch failed: ' + e.message + '</div>';
+    initialized = false;
   }
 }
 
