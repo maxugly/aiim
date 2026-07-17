@@ -40,6 +40,9 @@
   - `tests/compliance/`: test vectors for every frame type, handshake scenarios, error conditions
   - Language: Go (tests run against reference impl)
   - Agent: grit.714 + tom.714 | Est: 1-2 hours
+- [x] Spec compliance audit (P0.3) — score 8.7/10 PASS (review-qa-v4.md)
+  - 4 unit tests pass (frame round-trip, UUIDv4, happy path, agent_id mismatch)
+  - go vet clean, go build clean
 
 ### P1 — The Dashboard (replaces you as the status mechanism)
 
