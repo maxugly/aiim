@@ -61,7 +61,6 @@
 const POLL_MS = 5000;
 const STALE_MS = 30000;
 let prev = {};
-let openCards = new Set();  // survives re-renders
 
 function badgeClass(s) {
   const map = {idle:'badge-idle',writing:'badge-writing',reviewing:'badge-reviewing',
@@ -106,13 +105,6 @@ function renderTodos(todos) {
 
 function render(agents, age) {
   const el = document.getElementById('board');
-
-  // Save which cards were expanded before re-render
-  document.querySelectorAll('.card.open').forEach(function(c) {
-    var n = c.getAttribute('data-name');
-    if (n) openCards.add(n);
-  });
-
   if (!agents || Object.keys(agents).length === 0) {
     el.innerHTML = '<div class="error">no data — .presence.json empty or unreadable</div>';
     return;
@@ -155,13 +147,6 @@ function render(agents, age) {
   }
 
   el.innerHTML = html;
-
-  // Restore expanded cards that survived the re-render
-  openCards.forEach(function(n) {
-    var card = el.querySelector('.card[data-name="' + n + '"]');
-    if (card) card.classList.add('open');
-  });
-
   prev = agents;
 
   const footer = document.getElementById('footer');
