@@ -114,6 +114,12 @@
 - [x] QA v2 (grit.714, 7/10 score) — commit `6c1c9c1`
 - [x] Option B challenge-response auth — commit `5fe2088`
 - [x] 5 grit.vps findings fixed (ttl, doc_version, rate_limit, dedup, TOFU) — commit `5fe2088`
+- [x] Go reference handshake server (P0.2) — commit `7dfe3ed`
+  - `cmd/aiimd`: WebSocket server on /aiim/v1, full challenge-response handshake
+  - `pkg/protocol`: Frame types, NDJSON, handshake logic
+  - `pkg/identity`: Ed25519 keypair, signing, verification, TOFU trust store
+  - `tests/vectors/handshake.json`: 6 compliance test vectors
+  - ✅ Tested: go run ./cmd/testclient/ → HANDSHAKE SUCCESS
 - [x] Cross-team comms meta-analysis — in .artifacts.md
 - [x] Comms board (.coms.md) + artifacts board (.artifacts.md) established
 - [x] Cast list with both teams (7 agents)
