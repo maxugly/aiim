@@ -63,7 +63,7 @@ function render(agents, age) {
   let html = '';
   for (const [name, data] of Object.entries(agents).sort()) {
     const status = (data && data.status) ? data.status : 'offline';
-    const open = status === 'writing' || status === 'reviewing' ? ' open' : '';
+    const open = ' open';
     html += '<div class="agent' + open + '">';
     html += '<div class="agent-header" onclick="this.parentElement.classList.toggle(\'open\')">';
     html += '<span class="arrow">▶</span>';
