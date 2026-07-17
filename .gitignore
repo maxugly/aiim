@@ -2,3 +2,6 @@
 .coms.md
 .coms.sig
 .artifacts.md
+
+# Go binaries
+impl/reference/aiimd

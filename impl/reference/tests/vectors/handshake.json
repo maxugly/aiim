@@ -1,0 +1,189 @@
+{
+  "version": "0.1.0",
+  "description": "AIIM Handshake Compliance Test Vectors. Any implementation MUST pass all vectors.",
+  "vectors": [
+    {
+      "name": "happy-path-hello-ack-ready",
+      "description": "Full happy-path handshake: HELLO → ACK (with nonce) → READY (with valid signature) → ACTIVE",
+      "frames_in": [
+        {
+          "type": "HELLO",
+          "version": "0.1.0",
+          "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+          "timestamp": "2026-07-16T03:14:15Z",
+          "from": "agent:test@localhost",
+          "to": "agent:aiimd@localhost",
+          "ttl": 30,
+          "agent_id": "agent:test@localhost",
+          "supported_versions": ["0.1.0"],
+          "capabilities": ["test-client"],
+          "constitution_version": "0.1.0",
+          "metadata": {
+            "model": "test",
+            "provider": "go-test",
+            "max_context": 131072,
+            "send_rate_limit": 10
+          }
+        }
+      ],
+      "expected": {
+        "type": "ACK",
+        "accepted": true,
+        "version": "0.1.0",
+        "has_nonce": true,
+        "has_signature_verification": true
+      }
+    },
+    {
+      "name": "agent-id-mismatch",
+      "description": "HELLO where agent_id != from must be rejected with ERROR 400",
+      "frames_in": [
+        {
+          "type": "HELLO",
+          "version": "0.1.0",
+          "id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+          "timestamp": "2026-07-16T03:14:16Z",
+          "from": "agent:alice@localhost",
+          "to": "agent:aiimd@localhost",
+          "ttl": 30,
+          "agent_id": "agent:bob@localhost",
+          "supported_versions": ["0.1.0"],
+          "capabilities": [],
+          "constitution_version": "0.1.0",
+          "metadata": {
+            "model": "test",
+            "provider": "test",
+            "max_context": 131072,
+            "send_rate_limit": 10
+          }
+        }
+      ],
+      "expected": {
+        "type": "ACK",
+        "accepted": false,
+        "reason_contains": "agent_id"
+      }
+    },
+    {
+      "name": "signature-verification-failure",
+      "description": "READY with invalid signature must be rejected with ERROR 401",
+      "frames_in": [
+        {
+          "type": "HELLO",
+          "version": "0.1.0",
+          "id": "c3d4e5f6-a7b8-9012-cdef-123456789012",
+          "timestamp": "2026-07-16T03:14:17Z",
+          "from": "agent:test@localhost",
+          "to": "agent:aiimd@localhost",
+          "ttl": 30,
+          "agent_id": "agent:test@localhost",
+          "supported_versions": ["0.1.0"],
+          "capabilities": ["test-client"],
+          "constitution_version": "0.1.0",
+          "metadata": {
+            "model": "test",
+            "provider": "go-test",
+            "max_context": 131072,
+            "send_rate_limit": 10
+          }
+        },
+        {
+          "type": "READY",
+          "version": "0.1.0",
+          "id": "d4e5f6a7-b8c9-0123-defa-234567890123",
+          "timestamp": "2026-07-16T03:14:17Z",
+          "from": "agent:test@localhost",
+          "to": "agent:aiimd@localhost",
+          "ttl": 30,
+          "session_id": "00000000-0000-0000-0000-000000000000",
+          "established_at": "2026-07-16T03:14:17Z",
+          "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
+      "expected": {
+        "type": "ERROR",
+        "code": 401
+      }
+    },
+    {
+      "name": "version-mismatch",
+      "description": "HELLO with no common version must be rejected",
+      "frames_in": [
+        {
+          "type": "HELLO",
+          "version": "0.1.0",
+          "id": "e5f6a7b8-c9d0-1234-efab-345678901234",
+          "timestamp": "2026-07-16T03:14:18Z",
+          "from": "agent:test@localhost",
+          "to": "agent:aiimd@localhost",
+          "ttl": 30,
+          "agent_id": "agent:test@localhost",
+          "supported_versions": ["9.9.9"],
+          "capabilities": [],
+          "constitution_version": "0.1.0",
+          "metadata": {
+            "model": "test",
+            "provider": "test",
+            "max_context": 131072,
+            "send_rate_limit": 10
+          }
+        }
+      ],
+      "expected": {
+        "type": "ACK",
+        "accepted": false,
+        "reason_contains": "version"
+      }
+    },
+    {
+      "name": "missing-required-fields",
+      "description": "HELLO missing required field agent_id must be rejected",
+      "frames_in": [
+        {
+          "type": "HELLO",
+          "version": "0.1.0",
+          "id": "f6a7b8c9-d0e1-2345-fabc-456789012345",
+          "timestamp": "2026-07-16T03:14:19Z",
+          "from": "agent:test@localhost",
+          "to": "agent:aiimd@localhost",
+          "ttl": 30,
+          "supported_versions": ["0.1.0"],
+          "capabilities": [],
+          "constitution_version": "0.1.0",
+          "metadata": {
+            "model": "test",
+            "provider": "test",
+            "max_context": 131072,
+            "send_rate_limit": 10
+          }
+        }
+      ],
+      "expected": {
+        "type": "ERROR",
+        "code": 400
+      }
+    },
+    {
+      "name": "first-frame-not-hello",
+      "description": "First frame on a new connection that isn't HELLO must be rejected",
+      "frames_in": [
+        {
+          "type": "READY",
+          "version": "0.1.0",
+          "id": "a7b8c9d0-e1f2-3456-abcd-567890123456",
+          "timestamp": "2026-07-16T03:14:20Z",
+          "from": "agent:test@localhost",
+          "to": "agent:aiimd@localhost",
+          "ttl": 30,
+          "session_id": "00000000-0000-0000-0000-000000000000",
+          "established_at": "2026-07-16T03:14:20Z",
+          "signature": "AAAA"
+        }
+      ],
+      "expected": {
+        "type": "ERROR",
+        "code": 400
+      }
+    }
+  ]
+}
