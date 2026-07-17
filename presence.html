@@ -77,7 +77,9 @@ function colorize(json) {
 }
 
 function renderCard(name, badge, badgeCls, bodyHtml, pulseCls) {
-  return '<div class="card open' + (pulseCls||'') + '">' +
+  // Collapsed by default — user clicks the header to expand.
+  // DO NOT add 'open' to the class string. The user controls expand/collapse.
+  return '<div class="card' + (pulseCls||'') + '">' +
     '<div class="card-header" onclick="this.parentElement.classList.toggle(\'open\')">' +
     '<span class="arrow">▶</span>' +
     '<span class="card-name">' + name + '</span>' +
