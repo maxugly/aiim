@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AIIM Presence</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#0d1117; color:#c9d1d9; font:14px/1.5 'SF Mono', 'Fira Code', monospace; padding:20px; }
+  h1 { font-size:16px; color:#58a6ff; margin-bottom:16px; }
+  .agent { margin-bottom:12px; border:1px solid #21262d; border-radius:6px; overflow:hidden; }
+  .agent-header { display:flex; align-items:center; padding:8px 12px; background:#161b22; cursor:pointer; user-select:none; }
+  .agent-header:hover { background:#1c2128; }
+  .agent-header .arrow { width:16px; color:#484f58; transition:transform .15s; font-size:12px; }
+  .agent.open .arrow { transform:rotate(90deg); }
+  .agent-name { font-weight:600; color:#e6edf3; margin-left:6px; }
+  .agent-status { margin-left:auto; font-size:12px; padding:2px 8px; border-radius:10px; }
+  .status-idle { background:#21262d; color:#8b949e; }
+  .status-writing { background:#1a3a1a; color:#3fb950; }
+  .status-reviewing { background:#1a2a3a; color:#58a6ff; }
+  .status-thinking { background:#2a1a3a; color:#bc8cff; }
+  .status-blocked { background:#3a1a1a; color:#f85149; }
+  .status-offline { background:#21262d; color:#484f58; }
+  .agent-body { display:none; padding:8px 12px 12px; background:#0d1117; border-top:1px solid #21262d; }
+  .agent.open .agent-body { display:block; }
+  .json { white-space:pre-wrap; font-size:12px; color:#7ee787; }
+  .json .key { color:#79c0ff; }
+  .json .string { color:#a5d6ff; }
+  .json .null { color:#f85149; }
+  .footer { margin-top:20px; font-size:11px; color:#484f58; }
+  .refreshing { color:#d2991d; }
+  .stale { color:#f85149; }
+  .error { background:#3a1a1a; color:#f85149; padding:10px; border-radius:6px; margin-bottom:12px; }
+</style>
+</head>
+<body>
+<h1>⚡ AIIM Presence Board</h1>
+<div id="agents"></div>
+<div class="footer" id="footer"></div>
+
+<script>
+const POLL_MS = 5000;
+const STALE_MS = 30000;
+
+function statusClass(s) {
+  const map = {idle:'status-idle',writing:'status-writing',reviewing:'status-reviewing',
+               thinking:'status-thinking',blocked:'status-blocked',offline:'status-offline'};
+  return map[s] || 'status-idle';
+}
+
+function colorize(json) {
+  return json.replace(/("(?:[^"\\]|\\.)*")\s*:/g, '<span class="key">$1</span>:')
+             .replace(/: (".*?")/g, ': <span class="string">$1</span>')
+             .replace(/: (null)/g, ': <span class="null">$1</span>');
+}
+
+function render(agents, age) {
+  const el = document.getElementById('agents');
+  if (!agents || Object.keys(agents).length === 0) {
+    el.innerHTML = '<div class="error">no agents present — .presence.json empty or unreadable</div>';
+    return;
+  }
+  let html = '';
+  for (const [name, data] of Object.entries(agents).sort()) {
+    const status = (data && data.status) ? data.status : 'offline';
+    const open = status === 'writing' || status === 'reviewing' ? ' open' : '';
+    html += '<div class="agent' + open + '">';
+    html += '<div class="agent-header" onclick="this.parentElement.classList.toggle(\'open\')">';
+    html += '<span class="arrow">▶</span>';
+    html += '<span class="agent-name">' + name + '</span>';
+    html += '<span class="agent-status ' + statusClass(status) + '">' + status + '</span>';
+    html += '</div>';
+    html += '<div class="agent-body"><div class="json">' + colorize(JSON.stringify(data, null, 2)) + '</div></div>';
+    html += '</div>';
+  }
+  el.innerHTML = html;
+
+  const footer = document.getElementById('footer');
+  const secs = Math.round(age / 1000);
+  const cls = age > STALE_MS ? 'stale' : 'refreshing';
+  footer.innerHTML = '<span class="' + cls + '">updated ' + secs + 's ago</span> · auto-refresh ' + (POLL_MS/1000) + 's';
+}
+
+async function fetchPresence() {
+  try {
+    const t0 = Date.now();
+    const res = await fetch('.presence.json?_=' + t0, {cache:'no-store'});
+    if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
+    const data = await res.json();
+    render(data, Date.now() - t0);
+  } catch(e) {
+    document.getElementById('agents').innerHTML = '<div class="error">fetch failed: ' + e.message + ' — is .presence.json in the same directory?</div>';
+  }
+}
+
+fetchPresence();
+setInterval(fetchPresence, POLL_MS);
+</script>
+</body>
+</html>
